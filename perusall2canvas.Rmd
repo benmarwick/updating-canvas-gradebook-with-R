@@ -1,0 +1,150 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE)
+```
+
+## Introduction
+
+This code will take grades from Perusall and prepare them for uploading to Canvas. It will do one week (one column) only.
+
+## Get the Canvas gradebook
+
+Go to the Canvas course page, go to the gradebook for that course, click 'Actions' then 'Export'. That will download a CSV file to your computer. Move that file into the same folder as this R Markdown file.
+
+The ARCHY 109 WI20 Canvas page is here: https://canvas.uw.edu/courses/1352992/gradebook
+
+```{r}
+library(tidyverse)
+
+# update the Canvas gradebook file name here
+canvas_gradebook <- "2020-01-16T1203_Grades-ARCHY_109_A.csv"
+
+#---- read in the Canvas gradebook data
+
+# we export the Canvas gradebook, and the column 'SIS Login ID' is the UW Net ID for each student
+
+# this is the spreadsheet with Student ID from Perusall and Student ID that Canvas needs
+# we got the Student ID from the student in a Canvas Quiz
+student_id_data <- 
+  read_csv(canvas_gradebook) %>% 
+  filter(!is.na(`SIS Login ID`)) %>% 
+  # make a column of the UW Net ID for joining with Perusall data
+  mutate(uw_net_id = `SIS Login ID`) %>% 
+  # select only the relevant columns for this assignment 
+  # and those required to join
+  select(Student,     
+         ID,
+         `SIS User ID`,
+         `SIS Login ID`,
+         Section,
+         uw_net_id, 
+         contains("Reading annotations Week"))
+```
+
+Now we have the Canvas gradebook, with `r nrow(student_id_data)` students (including one test student), here's a preview:
+
+```{r}
+head(student_id_data)
+```
+
+
+## Get the Persuall gradebook
+
+Go to the Persuall page, go to the gradebook for that course, click 'Download'. That will download a CSV file to your computer. Move that file into the same folder as this R Markdown file.
+
+Here is the Perusall URL for ARCHY 109 WI20: https://app.perusall.com/courses/archy-109-archaeology-in-film-wi20/_/dashboard/assignments/2rS758uKS4AqyT3e8
+
+```{r}
+
+# update the Perusall gradebook file name here
+perusall_gradebook <- "gradebook.csv"
+
+#---- read in the Perusall gradebook data
+
+# this is the sheet with the grades from Perusall, we need to download a fresh CSV for each week. 
+perusall_data <- 
+  read_csv(perusall_gradebook) %>% 
+  mutate(uw_net_id = str_remove(`Email`, "@uw.edu"))
+
+```
+
+Here's how the Perusall data look, just the first few rows:
+
+```{r}
+head(perusall_data)
+```
+
+## Join Perusall grades to Canvas
+
+First, we set the week number we are working on. If we are updating grades for week 3, then we change the value here to 3. This will identify the relevant columns from the gradebooks.
+
+```{r}
+# set the week that we are working on
+this_is_week_n <- 1
+```
+
+Second, we join the Perusall grades to the Canvas gradebook:
+
+```{r}
+canvas_assignment_regex <- glue::glue("Reading annotations Week ", this_is_week_n, " \\(")
+canvas_assignment_column_name <-  str_subset(names(student_id_data), canvas_assignment_regex)
+
+perusall_assignment_regex <- glue::glue("Week ", this_is_week_n, "$")
+perusall_assignment_column_name <- str_subset(names(perusall_data), perusall_assignment_regex)
+
+# join the two and drop unwanted cols
+upload_to_canvas_gradebook <- 
+  student_id_data %>% 
+  # select relevant cols only
+  select(Student,     
+         ID,
+         `SIS User ID`,
+         `SIS Login ID`,
+         Section,
+         uw_net_id, 
+         canvas_assignment_column_name) %>% 
+  # join the data
+  left_join(perusall_data %>%  
+              select(uw_net_id, 
+                     perusall_assignment_column_name)) %>% 
+    # change NA to zero
+  mutate(!!perusall_assignment_column_name := ifelse(is.na(!!as.symbol(perusall_assignment_column_name)), 
+      0, 
+      !!as.symbol(perusall_assignment_column_name))) %>% 
+  # update column name with assignment name
+  mutate(!!canvas_assignment_column_name := !!as.symbol(perusall_assignment_column_name)) %>% 
+  # drop unwanted cols to prep for Canvas upload
+  select(-uw_net_id, 
+         -perusall_assignment_column_name) %>% 
+  # Canvas gradebook has a score out of 1.5, Perusall is out of 3, 
+  # so let's convert
+  mutate(!!canvas_assignment_column_name := !!as.symbol(canvas_assignment_column_name) / 3 * 1.5) 
+
+
+```
+
+Third, we export to CSV, ready to upload to Canvas:
+
+```{r}
+# ---- export to CSV
+write_csv(upload_to_canvas_gradebook, 
+          glue::glue("perusall_week_", 
+                     this_is_week_n,
+                     "_upload_to_canvas_gradebook",
+                     ".csv"))
+```
+
+## Clean up
+
+We delete the gradebooks to ensure we don't accidently use out-of-date data when we update the grades.
+
+```{r}
+unlink(c(canvas_gradebook, perusall_gradebook))
+```
+
+ 

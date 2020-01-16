@@ -1,0 +1,136 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This code will take grades from Poll Everywhere and prepare them for uploading to Canvas. It will do one week (one column in Canvas) only.
+
+## Get the Canvas gradebook
+
+Go to the Canvas course page, go to the gradebook for that course, click 'Actions' then 'Export'. That will download a CSV file to your computer. Move that file into the same folder as this R Markdown file.
+
+The ARCHY 109 WI20 Canvas page is here: https://canvas.uw.edu/courses/1352992/gradebook
+
+```{r}
+library(tidyverse)
+
+# update the Canvas gradebook file name here
+canvas_gradebook <- "2020-01-16T1235_Grades-ARCHY_109_A.csv"
+
+#---- read in the Canvas gradebook data
+
+# we export the Canvas gradebook, and the column 'SIS Login ID' is the UW Net ID for each student
+
+# this is the spreadsheet with Student ID from Perusall and Student ID that Canvas needs
+# we got the Student ID from the student in a Canvas Quiz
+student_id_data <- 
+  read_csv(canvas_gradebook) %>% 
+  filter(!is.na(`SIS Login ID`)) %>% 
+  # make a column of the UW Net ID for joining with Perusall data
+  mutate(uw_net_id = `SIS Login ID`) %>% 
+  # select only the relevant columns for this assignment 
+  # and those required to join
+  select(Student,     
+         ID,
+         `SIS User ID`,
+         `SIS Login ID`,
+         Section,
+         uw_net_id, 
+         contains("In-class activity Week"))
+
+```
+
+## Get the Poll Everywhere gradebook
+
+This process has a few steps that need to occur on the polleverywhere webpage to generate the CSV file we need here. 
+
+1. Go to https://www.polleverywhere.com/my/polls
+2. Select only the polls used in the week we are focussing on (check the box next to the poll)
+3. Click the 'Report' button at the top of the page
+4. Choose 'Gradebook'
+5. Update the name of the report with something like 'ARCHY 109 WI20 Week 1 Report'
+6. In the panel on the right, click 'Select Run', then 'All runs'
+7. Click 'Download' on the lower right of the page
+8. Move the CSV file into the same folder is this R Markdown file
+
+```{r}
+poll_everywhere_gradebook <- "archy-109-wi20-week-1-report_gradebook_679763.csv"
+
+#---- read in the Poll Everywhere gradebook data
+
+# this is the sheet with the grades from Poll Everywhere, we need to download a fresh CSV for each week. 
+poll_everywhere_data <- 
+  read_csv(poll_everywhere_gradebook) %>% 
+  mutate(uw_net_id = str_remove(`Email`, "@uw.edu")) %>% 
+  mutate(prop_polls_responded = parse_number(Participation) / 100) %>% 
+  select(uw_net_id, prop_polls_responded)
+```
+
+
+## Join Poll Everywhere grades to Canvas
+
+First, we set the week number we are working on. If we are updating grades for week 3, then we change the value here to 3. This will identify the relevant columns from the gradebooks.
+
+```{r}
+# set the week that we are working on
+this_is_week_n <- 1
+```
+
+Second, we join the Perusall grades to the Canvas gradebook:
+
+```{r}
+canvas_assignment_regex <- glue::glue("In-class activity Week ", this_is_week_n, " \\(")
+canvas_assignment_column_name <-  str_subset(names(student_id_data), canvas_assignment_regex)
+
+
+# join the two and drop unwanted cols
+upload_to_canvas_gradebook <- 
+  student_id_data %>% 
+  # select relevant cols only
+  select(Student,     
+         ID,
+         `SIS User ID`,
+         `SIS Login ID`,
+         Section,
+         uw_net_id, 
+         canvas_assignment_column_name) %>% 
+  # join the data
+  left_join(poll_everywhere_data %>%  
+              select(uw_net_id, 
+                     prop_polls_responded)) %>% 
+    # change NA to zero
+  mutate(prop_polls_responded = ifelse(is.na(prop_polls_responded), 
+      0, 
+     prop_polls_responded)) %>% 
+  # update column name with assignment name
+  mutate(!!canvas_assignment_column_name := prop_polls_responded) %>% 
+  # drop unwanted cols to prep for Canvas upload
+  select(-uw_net_id, 
+         -prop_polls_responded)  
+```
+
+Third, we export to CSV, ready to upload to Canvas:
+
+```{r}
+# ---- export to CSV
+write_csv(upload_to_canvas_gradebook, 
+          glue::glue("poll_everywhere_week_", 
+                     this_is_week_n,
+                     "_upload_to_canvas_gradebook",
+                     ".csv"))
+```
+
+## Clean up
+
+We delete the gradebooks to ensure we don't accidently use out-of-date data when we update the grades.
+
+```{r}
+unlink(c(canvas_gradebook, poll_everywhere_gradebook))
+```
+
